@@ -51,35 +51,36 @@ class MBConvBlock(nn.Module):
                         se_ratio, id_skip, batch_norm_momentum, batch_norm_epsilon,
                         image_size=None, drop_connect_rate=0.):
         super().__init__()
-        # self._block_args = block_args
-        self._bn_mom = 1 - batch_norm_momentum # pytorch's difference from tensorflow
-        self._bn_eps = batch_norm_epsilon
-        self.has_se = (se_ratio is not None) and (0 < se_ratio <= 1)
-        self.id_skip =id_skip  # whether to use skip connection and drop connect
-        self.expand_ratio = expand_ratio
-        self._drop_connect_rate = drop_connect_rate
+
         self.in_channels = in_channels
         self.out_channels = out_channels
+        self.id_skip =id_skip  # whether to use skip connection and drop connect
         self.stride = stride
+        self.expand_ratio = expand_ratio
+        self.has_se = (se_ratio is not None) and (0 < se_ratio <= 1)
+        self._drop_connect_rate = drop_connect_rate
 
+        # self._block_args = block_args
+        bn_mom = 1 - batch_norm_momentum # pytorch's difference from tensorflow
+        bn_eps = batch_norm_epsilon
+        
+        
         # Expansion phase (Inverted Bottleneck)
         inp = in_channels  # number of input channels
         oup = in_channels * expand_ratio  # number of output channels
         if expand_ratio != 1:
             Conv2d = get_same_padding_conv2d(image_size=image_size)
             self._expand_conv = Conv2d(in_channels=inp, out_channels=oup, kernel_size=1, bias=False)
-            self._bn0 = nn.BatchNorm2d(num_features=oup, momentum=self._bn_mom, eps=self._bn_eps)
+            self._bn0 = nn.BatchNorm2d(num_features=oup, momentum=bn_mom, eps=bn_eps)
             # image_size = calculate_output_image_size(image_size, 1) <-- this wouldn't modify image_size
 
         # Depthwise convolution phase
-        k = kernel_size
-        s = stride
         Conv2d = get_same_padding_conv2d(image_size=image_size)
         self._depthwise_conv = Conv2d(
             in_channels=oup, out_channels=oup, groups=oup,  # groups makes it depthwise
-            kernel_size=k, stride=s, bias=False)
-        self._bn1 = nn.BatchNorm2d(num_features=oup, momentum=self._bn_mom, eps=self._bn_eps)
-        image_size = calculate_output_image_size(image_size, s)
+            kernel_size=kernel_size, stride=self.stride, bias=False)
+        self._bn1 = nn.BatchNorm2d(num_features=oup, momentum=bn_mom, eps=bn_eps)
+        image_size = calculate_output_image_size(image_size, stride)
 
         # Squeeze and Excitation layer, if desired
         if self.has_se:
@@ -92,7 +93,7 @@ class MBConvBlock(nn.Module):
         final_oup = out_channels
         Conv2d = get_same_padding_conv2d(image_size=image_size)
         self._project_conv = Conv2d(in_channels=oup, out_channels=final_oup, kernel_size=1, bias=False)
-        self._bn2 = nn.BatchNorm2d(num_features=final_oup, momentum=self._bn_mom, eps=self._bn_eps)
+        self._bn2 = nn.BatchNorm2d(num_features=final_oup, momentum=bn_mom, eps=bn_eps)
         self._swish = MemoryEfficientSwish()
 
     def forward(self, inputs):
