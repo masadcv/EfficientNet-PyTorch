@@ -14,13 +14,11 @@ from .utils import (
     round_repeats,
     drop_connect,
     get_same_padding_conv2d,
-    get_model_params,
-    efficientnet_params,
-    load_pretrained_weights,
     Swish,
     MemoryEfficientSwish,
     calculate_output_image_size
 )
+from torch.utils import model_zoo
 
 
 VALID_MODELS = (
@@ -28,10 +26,23 @@ VALID_MODELS = (
     'efficientnet-b4', 'efficientnet-b5', 'efficientnet-b6', 'efficientnet-b7',
     'efficientnet-b8',
 
-    # Support the construction of 'efficientnet-l2' without pretrained weights
-    'efficientnet-l2'
+    # # Support the construction of 'efficientnet-l2' without pretrained weights
+    # 'efficientnet-l2'
 )
 
+efficientnet_params = {
+        # Coefficients:   width,depth,res,dropout
+        'efficientnet-b0': (1.0, 1.0, 224, 0.2),
+        'efficientnet-b1': (1.0, 1.1, 240, 0.2),
+        'efficientnet-b2': (1.1, 1.2, 260, 0.3),
+        'efficientnet-b3': (1.2, 1.4, 300, 0.3),
+        'efficientnet-b4': (1.4, 1.8, 380, 0.4),
+        'efficientnet-b5': (1.6, 2.2, 456, 0.4),
+        'efficientnet-b6': (1.8, 2.6, 528, 0.5),
+        'efficientnet-b7': (2.0, 3.1, 600, 0.5),
+        'efficientnet-b8': (2.2, 3.6, 672, 0.5),
+        'efficientnet-l2': (4.3, 5.3, 800, 0.5),
+    }
 
 class MBConvBlock(nn.Module):
     """Mobile Inverted Residual Bottleneck Block.
@@ -147,6 +158,65 @@ class MBConvBlock(nn.Module):
         """
         self._swish = MemoryEfficientSwish() if memory_efficient else Swish()
 
+import collections
+import re
+
+
+
+def decode_block_list(string_list):
+        """Decode a list of string notations to specify blocks inside the network.
+
+        Args:
+            string_list (list[str]): A list of strings, each string is a notation of block.
+
+        Returns:
+            blocks_args: A list of BlockArgs namedtuples of block args.
+        """
+        # Parameters for an individual model block
+        BlockArgs = collections.namedtuple('BlockArgs', [
+            'num_repeat', 'kernel_size', 'stride', 'expand_ratio',
+            'input_filters', 'output_filters', 'se_ratio', 'id_skip'])
+        BlockArgs.__new__.__defaults__ = (None,) * len(BlockArgs._fields)
+
+        def _decode_block_string(block_string):
+            """Get a block through a string notation of arguments.
+
+            Args:
+                block_string (str): A string notation of arguments.
+                                    Examples: 'r1_k3_s11_e1_i32_o16_se0.25_noskip'.
+
+            Returns:
+                BlockArgs: The namedtuple defined at the top of this file.
+            """
+            assert isinstance(block_string, str)
+
+            ops = block_string.split('_')
+            options = {}
+            for op in ops:
+                splits = re.split(r'(\d.*)', op)
+                if len(splits) >= 2:
+                    key, value = splits[:2]
+                    options[key] = value
+
+            # Check stride
+            assert (('s' in options and len(options['s']) == 1) or
+                    (len(options['s']) == 2 and options['s'][0] == options['s'][1]))
+
+            return BlockArgs(
+                num_repeat=int(options['r']),
+                kernel_size=int(options['k']),
+                stride=[int(options['s'][0])],
+                expand_ratio=int(options['e']),
+                input_filters=int(options['i']),
+                output_filters=int(options['o']),
+                se_ratio=float(options['se']) if 'se' in options else None,
+                id_skip=('noskip' not in block_string))
+        
+        assert isinstance(string_list, list)
+        blocks_args = []
+        for b_s in string_list:
+            blocks_args.append(_decode_block_string(b_s))
+        return blocks_args
 
 class EfficientNet(nn.Module):
     """EfficientNet model.
@@ -169,25 +239,33 @@ class EfficientNet(nn.Module):
         >>> model.eval()
         >>> outputs = model(inputs)
     """
-
-    def __init__(self, blocks_args=None, global_params=None):
+    def __init__(self, model_name, blocks_args, in_channels=3, num_classes=1000, 
+                width_coefficient=1.0, depth_coefficient=1.0, dropout_rate=0.2, 
+                image_size=224, batch_norm_momentum=0.99, batch_norm_epsilon=1e-3, 
+                drop_connect_rate=0.2, depth_divisor=8,):
         super().__init__()
+        
+        assert model_name in VALID_MODELS, 'model_name should be one of: ' + ', '.join(VALID_MODELS)
+        # blocks_args, _ = get_model_params(model_name, {'num_classes': num_classes})
+        blocks_args = decode_block_list(blocks_args)
+        print(blocks_args)
+        # model = cls(blocks_args, global_params)
+
         assert isinstance(blocks_args, list), 'blocks_args should be a list'
         assert len(blocks_args) > 0, 'block args must be greater than 0'
-        self._global_params = global_params
+        # self._global_params = global_params
         self._blocks_args = blocks_args
 
         # Batch norm parameters
-        bn_mom = 1 - self._global_params.batch_norm_momentum
-        bn_eps = self._global_params.batch_norm_epsilon
+        bn_mom = 1 - batch_norm_momentum
+        bn_eps = batch_norm_epsilon
 
         # Get stem static or dynamic convolution depending on image size
-        image_size = global_params.image_size
         Conv2d = get_same_padding_conv2d(image_size=image_size)
 
         # Stem
         in_channels = 3  # rgb
-        out_channels = round_filters(32, self._global_params)  # number of output channels
+        out_channels = round_filters(32, width_coefficient, depth_divisor)  # number of output channels
         self._conv_stem = Conv2d(in_channels, out_channels, kernel_size=3, stride=2, bias=False)
         self._bn0 = nn.BatchNorm2d(num_features=out_channels, momentum=bn_mom, eps=bn_eps)
         image_size = calculate_output_image_size(image_size, 2)
@@ -199,9 +277,9 @@ class EfficientNet(nn.Module):
         # Update block input and output filters based on depth multiplier.
         for idx, block_args in enumerate(self._blocks_args):
             block_args = block_args._replace(
-                input_filters=round_filters(block_args.input_filters, self._global_params),
-                output_filters=round_filters(block_args.output_filters, self._global_params),
-                num_repeat=round_repeats(block_args.num_repeat, self._global_params)
+                input_filters=round_filters(block_args.input_filters, width_coefficient, depth_divisor),
+                output_filters=round_filters(block_args.output_filters, width_coefficient, depth_divisor),
+                num_repeat=round_repeats(block_args.num_repeat, depth_coefficient)
             )
             self._blocks_args[idx] = block_args
             
@@ -211,26 +289,26 @@ class EfficientNet(nn.Module):
         idx = 0
         for block_args in self._blocks_args:
             
-            drop_connect_rate = self._global_params.drop_connect_rate
+            drop_connect_rate = drop_connect_rate
             if drop_connect_rate:
                 drop_connect_rate *= float(idx) / num_blocks # scale drop connect_rate
 
             # The first block needs to take care of stride and filter size increase.
             # self._blocks.append(MBConvBlock(block_args, self._global_params, image_size=image_size, drop_connect_rate=drop_connect_rate))
-            self._blocks.append(MBConvBlock(block_args.input_filters, block_args.output_filters, block_args.kernel_size, block_args.stride, block_args.expand_ratio, 
-                        block_args.se_ratio, block_args.id_skip, self._global_params.batch_norm_momentum, self._global_params.batch_norm_epsilon, 
-                        image_size=image_size, drop_connect_rate=drop_connect_rate))
+            self._blocks.append(MBConvBlock(block_args.input_filters, block_args.output_filters, block_args.kernel_size, 
+                                            block_args.stride, block_args.expand_ratio, block_args.se_ratio, block_args.id_skip, 
+                                            batch_norm_momentum, batch_norm_epsilon, image_size=image_size, drop_connect_rate=drop_connect_rate))
             idx += 1
 
             image_size = calculate_output_image_size(image_size, block_args.stride)
             if block_args.num_repeat > 1: # modify block_args to keep same output size
                 block_args = block_args._replace(input_filters=block_args.output_filters, stride=1)
             for _ in range(block_args.num_repeat - 1):
-                drop_connect_rate = self._global_params.drop_connect_rate
+                drop_connect_rate = drop_connect_rate
                 if drop_connect_rate:
                     drop_connect_rate *= float(idx) / num_blocks # scale drop connect_rate
                 self._blocks.append(MBConvBlock(block_args.input_filters, block_args.output_filters, block_args.kernel_size, block_args.stride, block_args.expand_ratio, 
-                        block_args.se_ratio, block_args.id_skip, self._global_params.batch_norm_momentum, self._global_params.batch_norm_epsilon, 
+                        block_args.se_ratio, block_args.id_skip, batch_norm_momentum, batch_norm_epsilon, 
                         image_size=image_size, drop_connect_rate=drop_connect_rate))
                 idx += 1
                 # image_size = calculate_output_image_size(image_size, block_args.stride)  # stride = 1
@@ -239,15 +317,15 @@ class EfficientNet(nn.Module):
 
         # Head
         in_channels = block_args.output_filters  # output of final block
-        out_channels = round_filters(1280, self._global_params)
+        out_channels = round_filters(1280, width_coefficient, depth_divisor)
         Conv2d = get_same_padding_conv2d(image_size=image_size)
         self._conv_head = Conv2d(in_channels, out_channels, kernel_size=1, bias=False)
         self._bn1 = nn.BatchNorm2d(num_features=out_channels, momentum=bn_mom, eps=bn_eps)
 
         # Final linear layer
         self._avg_pooling = nn.AdaptiveAvgPool2d(1)
-        self._dropout = nn.Dropout(self._global_params.dropout_rate)
-        self._fc = nn.Linear(out_channels, self._global_params.num_classes)
+        self._dropout = nn.Dropout(dropout_rate)
+        self._fc = nn.Linear(out_channels, num_classes)
         self._swish = MemoryEfficientSwish()
 
     def set_swish(self, memory_efficient=True):
@@ -281,94 +359,102 @@ class EfficientNet(nn.Module):
 
         # Pooling and final linear layer
         x = self._avg_pooling(x)
-        if self._global_params.include_top:
-            x = x.flatten(start_dim=1)
-            x = self._dropout(x)
-            x = self._fc(x)
+    
+        x = x.flatten(start_dim=1)
+        x = self._dropout(x)
+        x = self._fc(x)
         return x
 
-    @classmethod
-    def from_name(cls, model_name, in_channels=3, **override_params):
-        """create an efficientnet model according to name.
+def from_pretrained(model_name, weights_path=None, advprop=False,
+                    in_channels=3, num_classes=1000, **override_params):
+    """create an efficientnet model according to name.
+    """
+    
+    blocks_args = [
+        'r1_k3_s11_e1_i32_o16_se0.25',
+        'r2_k3_s22_e6_i16_o24_se0.25',
+        'r2_k5_s22_e6_i24_o40_se0.25',
+        'r3_k3_s22_e6_i40_o80_se0.25',
+        'r3_k5_s11_e6_i80_o112_se0.25',
+        'r4_k5_s22_e6_i112_o192_se0.25',
+        'r1_k3_s11_e6_i192_o320_se0.25',
+    ]
 
-        Args:
-            model_name (str): Name for efficientnet.
-            in_channels (int): Input data's channel number.
-            override_params (other key word params):
-                Params to override model's global_params.
-                Optional key:
-                    'width_coefficient', 'depth_coefficient',
-                    'image_size', 'dropout_rate',
-                    'num_classes', 'batch_norm_momentum',
-                    'batch_norm_epsilon', 'drop_connect_rate',
-                    'depth_divisor', 'min_depth'
+    wc, dc, isize, dr = efficientnet_params[model_name]
+    model = EfficientNet(model_name, blocks_args, in_channels=in_channels, num_classes=num_classes, 
+                        width_coefficient=wc, depth_coefficient=dc, dropout_rate=dr, image_size=isize)
 
-        Returns:
-            An efficientnet model.
-        """
-        assert model_name in VALID_MODELS, 'model_name should be one of: ' + ', '.join(VALID_MODELS)
-        blocks_args, global_params = get_model_params(model_name, override_params)
-        model = cls(blocks_args, global_params)
-        # model._change_in_channels(in_channels)
-        return model
+    load_pretrained_weights(model, model_name, weights_path=weights_path, load_fc=(num_classes == 1000), advprop=advprop)
+    return model
 
-    @classmethod
-    def from_pretrained(cls, model_name, weights_path=None, advprop=False,
-                        in_channels=3, num_classes=1000, **override_params):
-        """create an efficientnet model according to name.
-
-        Args:
-            model_name (str): Name for efficientnet.
-            weights_path (None or str):
-                str: path to pretrained weights file on the local disk.
-                None: use pretrained weights downloaded from the Internet.
-            advprop (bool):
-                Whether to load pretrained weights
-                trained with advprop (valid when weights_path is None).
-            in_channels (int): Input data's channel number.
-            num_classes (int):
-                Number of categories for classification.
-                It controls the output size for final linear layer.
-            override_params (other key word params):
-                Params to override model's global_params.
-                Optional key:
-                    'width_coefficient', 'depth_coefficient',
-                    'image_size', 'dropout_rate',
-                    'batch_norm_momentum',
-                    'batch_norm_epsilon', 'drop_connect_rate',
-                    'depth_divisor', 'min_depth'
-
-        Returns:
-            A pretrained efficientnet model.
-        """
-        model = cls.from_name(model_name, num_classes=num_classes, **override_params)
-        load_pretrained_weights(model, model_name, weights_path=weights_path, load_fc=(num_classes == 1000), advprop=advprop)
-        # model._change_in_channels(in_channels)
-        return model
-
-    @classmethod
-    def get_image_size(cls, model_name):
-        """Get the input image size for a given efficientnet model.
-
-        Args:
-            model_name (str): Name for efficientnet.
-
-        Returns:
-            Input image size (resolution).
-        """
-        # cls._check_model_name_is_valid(model_name)
-        assert model_name in VALID_MODELS, 'model_name should be one of: ' + ', '.join(VALID_MODELS)
-        _, _, res, _ = efficientnet_params(model_name)
-        return res
+def get_image_size(model_name):
+    """Get the input image size for a given efficientnet model.
+    """
+    # cls._check_model_name_is_valid(model_name)
+    assert model_name in VALID_MODELS, 'model_name should be one of: ' + ', '.join(VALID_MODELS)
+    _, _, res, _ = efficientnet_params[model_name]
+    return res
 
 
-    # def _change_in_channels(self, in_channels):
-    #     """Adjust model's first convolution layer to in_channels, if in_channels not equals 3.
+# train with Standard methods
+# check more details in paper(EfficientNet: Rethinking Model Scaling for Convolutional Neural Networks)
+url_map = {
+    'efficientnet-b0': 'https://github.com/lukemelas/EfficientNet-PyTorch/releases/download/1.0/efficientnet-b0-355c32eb.pth',
+    'efficientnet-b1': 'https://github.com/lukemelas/EfficientNet-PyTorch/releases/download/1.0/efficientnet-b1-f1951068.pth',
+    'efficientnet-b2': 'https://github.com/lukemelas/EfficientNet-PyTorch/releases/download/1.0/efficientnet-b2-8bb594d6.pth',
+    'efficientnet-b3': 'https://github.com/lukemelas/EfficientNet-PyTorch/releases/download/1.0/efficientnet-b3-5fb5a3c3.pth',
+    'efficientnet-b4': 'https://github.com/lukemelas/EfficientNet-PyTorch/releases/download/1.0/efficientnet-b4-6ed6700e.pth',
+    'efficientnet-b5': 'https://github.com/lukemelas/EfficientNet-PyTorch/releases/download/1.0/efficientnet-b5-b6417697.pth',
+    'efficientnet-b6': 'https://github.com/lukemelas/EfficientNet-PyTorch/releases/download/1.0/efficientnet-b6-c76e70fd.pth',
+    'efficientnet-b7': 'https://github.com/lukemelas/EfficientNet-PyTorch/releases/download/1.0/efficientnet-b7-dcc49843.pth',
+}
 
-    #     Args:
-    #         in_channels (int): Input data's channel number.
-    #     """
-    #     if in_channels != 3:
-    #         Conv2d = get_same_padding_conv2d(image_size=self._global_params.image_size)
-    #         out_channels = round_filters(32, self._global_params)
-    #         self._conv_stem = Conv2d(in_channels, out_channels, kernel_size=3, stride=2, bias=False)
+# train with Adversarial Examples(AdvProp)
+# check more details in paper(Adversarial Examples Improve Image Recognition)
+url_map_advprop = {
+    'efficientnet-b0': 'https://github.com/lukemelas/EfficientNet-PyTorch/releases/download/1.0/adv-efficientnet-b0-b64d5a18.pth',
+    'efficientnet-b1': 'https://github.com/lukemelas/EfficientNet-PyTorch/releases/download/1.0/adv-efficientnet-b1-0f3ce85a.pth',
+    'efficientnet-b2': 'https://github.com/lukemelas/EfficientNet-PyTorch/releases/download/1.0/adv-efficientnet-b2-6e9d97e5.pth',
+    'efficientnet-b3': 'https://github.com/lukemelas/EfficientNet-PyTorch/releases/download/1.0/adv-efficientnet-b3-cdd7c0f4.pth',
+    'efficientnet-b4': 'https://github.com/lukemelas/EfficientNet-PyTorch/releases/download/1.0/adv-efficientnet-b4-44fb3a87.pth',
+    'efficientnet-b5': 'https://github.com/lukemelas/EfficientNet-PyTorch/releases/download/1.0/adv-efficientnet-b5-86493f6b.pth',
+    'efficientnet-b6': 'https://github.com/lukemelas/EfficientNet-PyTorch/releases/download/1.0/adv-efficientnet-b6-ac80338e.pth',
+    'efficientnet-b7': 'https://github.com/lukemelas/EfficientNet-PyTorch/releases/download/1.0/adv-efficientnet-b7-4652b6dd.pth',
+    'efficientnet-b8': 'https://github.com/lukemelas/EfficientNet-PyTorch/releases/download/1.0/adv-efficientnet-b8-22a8fe65.pth',
+}
+
+# TODO: add the petrained weights url map of 'efficientnet-l2'
+
+
+def load_pretrained_weights(model, model_name, weights_path=None, load_fc=True, advprop=False):
+    """Loads pretrained weights from weights path or download using url.
+
+    Args:
+        model (Module): The whole model of efficientnet.
+        model_name (str): Model name of efficientnet.
+        weights_path (None or str):
+            str: path to pretrained weights file on the local disk.
+            None: use pretrained weights downloaded from the Internet.
+        load_fc (bool): Whether to load pretrained weights for fc layer at the end of the model.
+        advprop (bool): Whether to load pretrained weights
+                        trained with advprop (valid when weights_path is None).
+    """
+    if isinstance(weights_path, str):
+        state_dict = torch.load(weights_path)
+    else:
+        # AutoAugment or Advprop (different preprocessing)
+        url_map_ = url_map_advprop if advprop else url_map
+        state_dict = model_zoo.load_url(url_map_[model_name])
+
+    if load_fc:
+        ret = model.load_state_dict(state_dict, strict=False)
+        assert not ret.missing_keys, 'Missing keys when loading pretrained weights: {}'.format(ret.missing_keys)
+    else:
+        state_dict.pop('_fc.weight')
+        state_dict.pop('_fc.bias')
+        ret = model.load_state_dict(state_dict, strict=False)
+        assert set(ret.missing_keys) == set(
+            ['_fc.weight', '_fc.bias']), 'Missing keys when loading pretrained weights: {}'.format(ret.missing_keys)
+    assert not ret.unexpected_keys, 'Missing keys when loading pretrained weights: {}'.format(ret.unexpected_keys)
+
+    print('Loaded pretrained weights for {}'.format(model_name))

@@ -8,13 +8,13 @@ from PIL import Image
 import torch
 from torchvision import transforms
 
-from efficientnet_pytorch import EfficientNet
+from efficientnet_pytorch import EfficientNet, get_image_size, from_pretrained
 
 model_names = ['efficientnet-b%d' % i for i in range(8)]
 # print(model_names)
 
 for model_name in model_names:
-    image_size = EfficientNet.get_image_size(model_name) # 224
+    image_size = get_image_size(model_name) # 224
 
     # Open image
     img = Image.open('examples/simple/cat.jpeg')
@@ -31,7 +31,7 @@ for model_name in model_names:
     labels_map = [labels_map[str(i)] for i in range(1000)]
 
     # Classify with EfficientNet
-    model = EfficientNet.from_pretrained(model_name)
+    model = from_pretrained(model_name)
     model.eval()
     with torch.no_grad():
         logits = model(img)
