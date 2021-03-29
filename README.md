@@ -1,5 +1,8 @@
 # EfficientNet PyTorch
 
+# Forked and Modified from the original repository
+If you are looking for original repository, please follow the link above. This repository has been heavily refactored from the original repository. 
+
 ### Quickstart
 
 Install with `pip install efficientnet_pytorch` and load a pretrained EfficientNet with:

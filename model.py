@@ -6,10 +6,12 @@
 # Github repo: https://github.com/lukemelas/EfficientNet-PyTorch
 # With adjustments and added comments by workingcoder (github username).
 
+import collections
+import re
 import torch
 from torch import nn
 from torch.nn import functional as F
-from .utils import (
+from utils import (
     round_filters,
     round_repeats,
     drop_connect,
@@ -25,9 +27,6 @@ VALID_MODELS = (
     'efficientnet-b0', 'efficientnet-b1', 'efficientnet-b2', 'efficientnet-b3',
     'efficientnet-b4', 'efficientnet-b5', 'efficientnet-b6', 'efficientnet-b7',
     'efficientnet-b8',
-
-    # # Support the construction of 'efficientnet-l2' without pretrained weights
-    # 'efficientnet-l2'
 )
 
 efficientnet_params = {
@@ -65,7 +64,7 @@ class MBConvBlock(nn.Module):
 
         self.in_channels = in_channels
         self.out_channels = out_channels
-        self.id_skip =id_skip  # whether to use skip connection and drop connect
+        self.id_skip = id_skip  # whether to use skip connection and drop connect
         self.stride = stride
         self.expand_ratio = expand_ratio
         self.has_se = (se_ratio is not None) and (0 < se_ratio <= 1)
@@ -157,10 +156,6 @@ class MBConvBlock(nn.Module):
             memory_efficient (bool): Whether to use memory-efficient version of swish.
         """
         self._swish = MemoryEfficientSwish() if memory_efficient else Swish()
-
-import collections
-import re
-
 
 
 def decode_block_list(string_list):

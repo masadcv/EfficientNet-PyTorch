@@ -8,7 +8,7 @@ from PIL import Image
 import torch
 from torchvision import transforms
 
-from efficientnet_pytorch import EfficientNet, get_image_size, from_pretrained
+from model import EfficientNet, get_image_size, from_pretrained
 
 model_names = ['efficientnet-b%d' % i for i in range(8)]
 # print(model_names)
@@ -17,7 +17,7 @@ for model_name in model_names:
     image_size = get_image_size(model_name) # 224
 
     # Open image
-    img = Image.open('examples/simple/cat.jpeg')
+    img = Image.open('testdata/cat.jpeg')
     img
 
     # Preprocess image
@@ -27,7 +27,7 @@ for model_name in model_names:
     img = tfms(img).unsqueeze(0)
 
     # Load class names
-    labels_map = json.load(open('examples/simple/labels_map.txt'))
+    labels_map = json.load(open('testdata/labels_map.txt'))
     labels_map = [labels_map[str(i)] for i in range(1000)]
 
     # Classify with EfficientNet
