@@ -6,15 +6,12 @@
 # Github repo: https://github.com/lukemelas/EfficientNet-PyTorch
 # With adjustments and added comments by workingcoder (github username).
 
-
-import collections
-import re
 import torch
 from torch import nn
 from torch.nn import functional as F
-from utils import make_same_padder, round_filters, round_repeats, drop_connect, calculate_output_image_size
 from torch.utils import model_zoo
 
+from utils import calculate_output_image_size, decode_block_list, drop_connect, make_same_padder, round_filters, round_repeats
 
 VALID_MODELS = (
     'efficientnet-b0', 'efficientnet-b1', 'efficientnet-b2', 'efficientnet-b3',
@@ -33,8 +30,18 @@ efficientnet_params = {
         'efficientnet-b6': (1.8, 2.6, 528, 0.5),
         'efficientnet-b7': (2.0, 3.1, 600, 0.5),
         'efficientnet-b8': (2.2, 3.6, 672, 0.5),
-        'efficientnet-l2': (4.3, 5.3, 800, 0.5),
     }
+
+url_map = {
+    'efficientnet-b0': 'https://github.com/lukemelas/EfficientNet-PyTorch/releases/download/1.0/efficientnet-b0-355c32eb.pth',
+    'efficientnet-b1': 'https://github.com/lukemelas/EfficientNet-PyTorch/releases/download/1.0/efficientnet-b1-f1951068.pth',
+    'efficientnet-b2': 'https://github.com/lukemelas/EfficientNet-PyTorch/releases/download/1.0/efficientnet-b2-8bb594d6.pth',
+    'efficientnet-b3': 'https://github.com/lukemelas/EfficientNet-PyTorch/releases/download/1.0/efficientnet-b3-5fb5a3c3.pth',
+    'efficientnet-b4': 'https://github.com/lukemelas/EfficientNet-PyTorch/releases/download/1.0/efficientnet-b4-6ed6700e.pth',
+    'efficientnet-b5': 'https://github.com/lukemelas/EfficientNet-PyTorch/releases/download/1.0/efficientnet-b5-b6417697.pth',
+    'efficientnet-b6': 'https://github.com/lukemelas/EfficientNet-PyTorch/releases/download/1.0/efficientnet-b6-c76e70fd.pth',
+    'efficientnet-b7': 'https://github.com/lukemelas/EfficientNet-PyTorch/releases/download/1.0/efficientnet-b7-dcc49843.pth',
+}
 
 # An ordinary implementation of Swish function
 class Swish(nn.Module):
@@ -173,62 +180,6 @@ class MBConvBlock(nn.Module):
             memory_efficient (bool): Whether to use memory-efficient version of swish.
         """
         self._swish = MemoryEfficientSwish() if memory_efficient else Swish()
-
-
-def decode_block_list(string_list):
-        """Decode a list of string notations to specify blocks inside the network.
-
-        Args:
-            string_list (list[str]): A list of strings, each string is a notation of block.
-
-        Returns:
-            blocks_args: A list of BlockArgs namedtuples of block args.
-        """
-        # Parameters for an individual model block
-        BlockArgs = collections.namedtuple('BlockArgs', [
-            'num_repeat', 'kernel_size', 'stride', 'expand_ratio',
-            'input_filters', 'output_filters', 'se_ratio', 'id_skip'])
-        BlockArgs.__new__.__defaults__ = (None,) * len(BlockArgs._fields)
-
-        def _decode_block_string(block_string):
-            """Get a block through a string notation of arguments.
-
-            Args:
-                block_string (str): A string notation of arguments.
-                                    Examples: 'r1_k3_s11_e1_i32_o16_se0.25_noskip'.
-
-            Returns:
-                BlockArgs: The namedtuple defined at the top of this file.
-            """
-            assert isinstance(block_string, str)
-
-            ops = block_string.split('_')
-            options = {}
-            for op in ops:
-                splits = re.split(r'(\d.*)', op)
-                if len(splits) >= 2:
-                    key, value = splits[:2]
-                    options[key] = value
-
-            # Check stride
-            assert (('s' in options and len(options['s']) == 1) or
-                    (len(options['s']) == 2 and options['s'][0] == options['s'][1]))
-
-            return BlockArgs(
-                num_repeat=int(options['r']),
-                kernel_size=int(options['k']),
-                stride=[int(options['s'][0])],
-                expand_ratio=int(options['e']),
-                input_filters=int(options['i']),
-                output_filters=int(options['o']),
-                se_ratio=float(options['se']) if 'se' in options else None,
-                id_skip=('noskip' not in block_string))
-        
-        assert isinstance(string_list, list)
-        blocks_args = []
-        for b_s in string_list:
-            blocks_args.append(_decode_block_string(b_s))
-        return blocks_args
 
 class EfficientNet(nn.Module):
     """EfficientNet model.
@@ -409,20 +360,6 @@ def get_image_size(model_name):
     assert model_name in VALID_MODELS, 'model_name should be one of: ' + ', '.join(VALID_MODELS)
     _, _, res, _ = efficientnet_params[model_name]
     return res
-
-
-# train with Standard methods
-# check more details in paper(EfficientNet: Rethinking Model Scaling for Convolutional Neural Networks)
-url_map = {
-    'efficientnet-b0': 'https://github.com/lukemelas/EfficientNet-PyTorch/releases/download/1.0/efficientnet-b0-355c32eb.pth',
-    'efficientnet-b1': 'https://github.com/lukemelas/EfficientNet-PyTorch/releases/download/1.0/efficientnet-b1-f1951068.pth',
-    'efficientnet-b2': 'https://github.com/lukemelas/EfficientNet-PyTorch/releases/download/1.0/efficientnet-b2-8bb594d6.pth',
-    'efficientnet-b3': 'https://github.com/lukemelas/EfficientNet-PyTorch/releases/download/1.0/efficientnet-b3-5fb5a3c3.pth',
-    'efficientnet-b4': 'https://github.com/lukemelas/EfficientNet-PyTorch/releases/download/1.0/efficientnet-b4-6ed6700e.pth',
-    'efficientnet-b5': 'https://github.com/lukemelas/EfficientNet-PyTorch/releases/download/1.0/efficientnet-b5-b6417697.pth',
-    'efficientnet-b6': 'https://github.com/lukemelas/EfficientNet-PyTorch/releases/download/1.0/efficientnet-b6-c76e70fd.pth',
-    'efficientnet-b7': 'https://github.com/lukemelas/EfficientNet-PyTorch/releases/download/1.0/efficientnet-b7-dcc49843.pth',
-}
 
 def load_pretrained_weights(model, model_name, weights_path=None, load_fc=True):
     """Loads pretrained weights from weights path or download using url.

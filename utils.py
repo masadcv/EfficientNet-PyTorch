@@ -6,7 +6,10 @@
 # Github repo: https://github.com/lukemelas/EfficientNet-PyTorch
 # With adjustments and added comments by workingcoder (github username).
 
+import collections
 import math
+import re
+
 import torch
 from torch import nn
 
@@ -133,3 +136,58 @@ def make_same_padder(conv_op, image_size):
         return padders[len(padding)//2-1](padding=padding, value=0)
     else:
         return nn.Identity()
+
+def decode_block_list(string_list):
+        """Decode a list of string notations to specify blocks inside the network.
+
+        Args:
+            string_list (list[str]): A list of strings, each string is a notation of block.
+
+        Returns:
+            blocks_args: A list of BlockArgs namedtuples of block args.
+        """
+        # Parameters for an individual model block
+        BlockArgs = collections.namedtuple('BlockArgs', [
+            'num_repeat', 'kernel_size', 'stride', 'expand_ratio',
+            'input_filters', 'output_filters', 'se_ratio', 'id_skip'])
+        BlockArgs.__new__.__defaults__ = (None,) * len(BlockArgs._fields)
+
+        def _decode_block_string(block_string):
+            """Get a block through a string notation of arguments.
+
+            Args:
+                block_string (str): A string notation of arguments.
+                                    Examples: 'r1_k3_s11_e1_i32_o16_se0.25_noskip'.
+
+            Returns:
+                BlockArgs: The namedtuple defined at the top of this file.
+            """
+            assert isinstance(block_string, str)
+
+            ops = block_string.split('_')
+            options = {}
+            for op in ops:
+                splits = re.split(r'(\d.*)', op)
+                if len(splits) >= 2:
+                    key, value = splits[:2]
+                    options[key] = value
+
+            # Check stride
+            assert (('s' in options and len(options['s']) == 1) or
+                    (len(options['s']) == 2 and options['s'][0] == options['s'][1]))
+
+            return BlockArgs(
+                num_repeat=int(options['r']),
+                kernel_size=int(options['k']),
+                stride=[int(options['s'][0])],
+                expand_ratio=int(options['e']),
+                input_filters=int(options['i']),
+                output_filters=int(options['o']),
+                se_ratio=float(options['se']) if 'se' in options else None,
+                id_skip=('noskip' not in block_string))
+        
+        assert isinstance(string_list, list)
+        blocks_args = []
+        for b_s in string_list:
+            blocks_args.append(_decode_block_string(b_s))
+        return blocks_args
