@@ -115,4 +115,7 @@ venv.bak/
 #vscode
 .vscode/
 
+# venv
+venv/
+
 

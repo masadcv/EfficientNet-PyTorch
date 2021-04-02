@@ -12,6 +12,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 from utils import (
+    my_get_same_padding_conv2d,
     round_filters,
     round_repeats,
     drop_connect,
@@ -243,17 +244,21 @@ class EfficientNet(nn.Module):
         assert model_name in VALID_MODELS, 'model_name should be one of: ' + ', '.join(VALID_MODELS)
         # blocks_args, _ = get_model_params(model_name, {'num_classes': num_classes})
         blocks_args = decode_block_list(blocks_args)
-        print(blocks_args)
+        # print(blocks_args)
         # model = cls(blocks_args, global_params)
 
         assert isinstance(blocks_args, list), 'blocks_args should be a list'
         assert len(blocks_args) > 0, 'block args must be greater than 0'
+        
         # self._global_params = global_params
         self._blocks_args = blocks_args
 
         # Batch norm parameters
         bn_mom = 1 - batch_norm_momentum
         bn_eps = batch_norm_epsilon
+
+        if isinstance(image_size, int):
+            image_size = [image_size] * 2
 
         # Get stem static or dynamic convolution depending on image size
         Conv2d = get_same_padding_conv2d(image_size=image_size)
